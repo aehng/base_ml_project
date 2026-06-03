@@ -1,0 +1,168 @@
+```{python}
+import pandas as pd
+import numpy as np
+from IPython.display import display
+from lets_plot import (
+    LetsPlot,
+    aes,
+    element_text,
+    geom_bar,
+    geom_boxplot,
+    geom_line,
+    geom_point,
+    geom_smooth,
+    ggplot,
+    labs,
+    theme,
+    theme_minimal,
+)
+
+# Make numpy values easier to read.
+np.set_printoptions(precision=3, suppress=True)
+
+LetsPlot.setup_html()
+
+bikes = pd.read_csv(
+    "https://raw.githubusercontent.com/byui-cse/cse450-course/master/data/bikes.csv")
+
+bikes["dteday"] = pd.to_datetime(bikes["dteday"], errors="coerce")
+bikes["total_rentals"] = bikes["casual"] + bikes["registered"]
+bikes["season"] = bikes["season"].astype("category")
+bikes["weathersit"] = bikes["weathersit"].astype("category")
+bikes["holiday"] = bikes["holiday"].astype("category")
+bikes["workingday"] = bikes["workingday"].astype("category")
+```
+
+
+```{python}
+bikes.info()
+```
+
+
+## Rental relationships by data type
+
+```{python}
+numeric_cols = ["temp_c", "feels_like_c", "hum", "windspeed", "hr"]
+for col in numeric_cols:
+    p = (
+        ggplot(bikes, aes(x=col, y="total_rentals", color="season"))
+        + geom_point(alpha=0.25, size=1.2)
+        + geom_smooth(method="loess", color="#1f77b4", se=True)
+        + labs(
+            title=f"Total Rentals vs {col.replace('_', ' ').title()}",
+            x=col.replace("_", " ").title(),
+            y="Total Rentals",
+            color="Season",
+        )
+        + theme_minimal()
+        + theme(axis_text_x=element_text(angle=20, hjust=1))
+    )
+    display(p)
+```
+
+```{python}
+cat_cols = ["season", "weathersit", "holiday", "workingday"]
+for col in cat_cols:
+    p = (
+        ggplot(bikes, aes(x=col, y="total_rentals", fill=col))
+        + geom_boxplot(color="#2c7fb8")
+        + labs(
+            title=f"Total Rental Distribution by {col.title()}",
+            x=col.replace("_", " ").title(),
+            y="Total Rentals",
+            fill=col.replace("_", " ").title(),
+        )
+        + theme_minimal()
+        + theme(axis_text_x=element_text(angle=25, hjust=1))
+    )
+    display(p)
+```
+
+## Hourly and seasonal rental patterns
+
+```{python}
+hourly = (
+    bikes.groupby(["hr", "season"], as_index=False)
+    .agg({"total_rentals": "mean"})
+    .rename(columns={"total_rentals": "avg_rentals"})
+)
+p = (
+    ggplot(hourly, aes(x="hr", y="avg_rentals", color="season", group="season"))
+    + geom_line(size=1.2)
+    + geom_point(size=2)
+    + labs(
+        title="Average Hourly Rentals by Season",
+        x="Hour of Day",
+        y="Average Total Rentals",
+        color="Season",
+    )
+    + theme_minimal()
+)
+display(p)
+```
+
+```{python}
+weather = (
+    bikes.groupby(["weathersit", "hr"], as_index=False)
+    .agg({"total_rentals": "mean"})
+    .rename(columns={"total_rentals": "avg_rentals"})
+)
+p = (
+    ggplot(weather, aes(x="hr", y="avg_rentals", color="weathersit", group="weathersit"))
+    + geom_line(size=1.2)
+    + labs(
+        title="Hourly Rentals by Weather Situation",
+        x="Hour of Day",
+        y="Average Total Rentals",
+        color="Weather Situation",
+    )
+    + theme_minimal()
+)
+display(p)
+```
+
+## Holiday and workday effects on rental volume
+
+```{python}
+season_mean = (
+    bikes.groupby("season", as_index=False)
+    .agg({"total_rentals": "mean"})
+    .rename(columns={"total_rentals": "avg_rentals"})
+)
+p = (
+    ggplot(season_mean, aes(x="season", y="avg_rentals", fill="season"))
+    + geom_bar(stat="identity", color="black")
+    + labs(
+        title="Average Rentals by Season",
+        x="Season",
+        y="Average Total Rentals",
+        fill="Season",
+    )
+    + theme_minimal()
+    + theme(axis_text_x=element_text(angle=20, hjust=1))
+)
+display(p)
+```
+
+```{python}
+holiday_mean = (
+    bikes.groupby("holiday", as_index=False)
+    .agg({"total_rentals": "mean"})
+    .rename(columns={"total_rentals": "avg_rentals"})
+)
+p = (
+    ggplot(holiday_mean, aes(x="holiday", y="avg_rentals", fill="holiday"))
+    + geom_bar(stat="identity", color="black")
+    + labs(
+        title="Average Rentals: Holiday vs Non-Holiday",
+        x="Holiday",
+        y="Average Total Rentals",
+        fill="Holiday",
+    )
+    + theme_minimal()
+    + theme(axis_text_x=element_text(angle=20, hjust=1))
+)
+display(p)
+```
+
+

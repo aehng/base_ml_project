@@ -30,3 +30,22 @@ class Transformation(ABC):
 Please Code any new Transformation Child Classes directly below this comment.  
 --------------------------------------------------------------------------------------
 """
+
+class HourOfDaySine(Transformation):
+    def __init__(self, hour_col: str = "hour", output_col: str = "hour_sin"):
+        self.hour_col = hour_col
+        self.output_col = output_col
+
+    def fit(self, df: pl.DataFrame):
+        return self
+
+    def transform(self, df: pl.DataFrame) -> pl.DataFrame:
+        return df.with_columns(
+            (
+                pl.col(self.hour_col)
+                .cast(pl.Float64)
+                .mul(2.0 * np.pi / 24.0)
+                .sin()
+                .alias(self.output_col)
+            )
+        )
