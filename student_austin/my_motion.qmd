@@ -1,0 +1,285 @@
+```{python}
+import pandas
+import numpy
+import joblib
+import tensorflow
+
+from tensorflow import keras
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dropout, Flatten, Dense
+
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import root_mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+```
+
+```{python}
+bikes = pandas.read_csv("https://raw.githubusercontent.com/byui-cse/cse450-course/master/data/bikes.csv")
+```
+
+```{python}
+def features(df):
+    #Creating 'days to holiday'
+    df['date'] = pandas.to_datetime(df['dteday'], format='%m/%d/%Y')
+
+    holidays = df.loc[df['holiday'] == 1, ['date']].sort_values('date').drop_duplicates()
+    holidays = holidays.rename(columns={'date': 'holiday_date'})
+
+    df_sorted = df.sort_values('date')
+
+    next_hol = pandas.merge_asof(
+    df_sorted[['date']], 
+    holidays, 
+    left_on='date', 
+    right_on='holiday_date', 
+    direction='forward'
+    )
+
+    prev_hol = pandas.merge_asof(
+    df_sorted[['date']], 
+    holidays, 
+    left_on='date', 
+    right_on='holiday_date', 
+    direction='backward'
+    )
+
+    days_to_next = (next_hol['holiday_date'] - df_sorted['date']).dt.days
+    days_to_prev = (df_sorted['date'] - prev_hol['holiday_date']).dt.days
+
+    days_to_closest = pandas.concat([days_to_next, days_to_prev], axis=1).min(axis=1)
+
+    df_sorted['days_to_holiday'] = days_to_closest
+
+    df = df_sorted.sort_index()
+
+    df['dteday'] = pandas.to_datetime(df['dteday'])
+
+    #  year
+    df['year'] = df['dteday'].dt.year
+
+    # month cycle
+    df['month'] = df['dteday'].dt.month
+    df['month_sin'] = numpy.sin(2 * numpy.pi * df['month'] / 12)
+    df['month_cos'] = numpy.cos(2 * numpy.pi * df['month'] / 12)
+
+    # day of year cycle
+    df['day_of_year'] = df['dteday'].dt.dayofyear
+    df['day_of_year_sin'] = numpy.sin(2 * numpy.pi * df['day_of_year'] / 365)
+    df['day_of_year_cos'] = numpy.cos(2 * numpy.pi * df['day_of_year'] / 365)
+
+    # day cycle
+    df['day_of_week'] = df['dteday'].dt.dayofweek.astype(int)
+    df['day_of_week_sin'] = numpy.sin(2 * numpy.pi * df['day_of_week'] / 7)
+    df['day_of_week_cos'] = numpy.cos(2 * numpy.pi * df['day_of_week'] / 7)
+
+    #  season cycle
+    df['season_sin'] = numpy.sin(2 * numpy.pi * df['season'] / 4)
+    df['season_cos'] = numpy.cos(2 * numpy.pi * df['season'] / 4)
+
+    df = df.drop(columns=["dteday", "date"])
+
+    return(df)
+```
+
+```{python}
+scaler_x = MinMaxScaler()
+scaler_x2 = MinMaxScaler()
+scaler_y1 = MinMaxScaler()
+scaler_y2 = MinMaxScaler()  
+```
+
+```{python}
+X = features(bikes)
+
+X = X.drop(columns = ["casual", "registered"])
+
+y1 = bikes[["casual"]]
+y2 = bikes[["registered"]]
+
+X_train, X_test, y1_train, y1_test = train_test_split(X, y1, test_size = 0.2, random_state = 69)
+X_train2, X_test2, y2_train, y2_test = train_test_split(X, y2, test_size = 0.2, random_state = 69)
+
+scaler_x.fit(X_train)
+scaler_x2.fit(X_train2)
+scaler_y1.fit(y1_train)
+scaler_y2.fit(y2_train)
+
+X_train_s = scaler_x.transform(X_train)
+X_test_s = scaler_x.transform(X_test)
+
+X_train_s2 = scaler_x2.transform(X_train2)
+X_test_s2 = scaler_x2.transform(X_test2)
+
+y1_train_s = scaler_y1.transform(y1_train)
+y1_test_s = scaler_y1.transform(y1_test)
+
+y2_train_s = scaler_y2.transform(y2_train)
+y2_test_s = scaler_y2.transform(y2_test)
+```
+
+```{python}
+y1_model = Sequential()
+y1_model.add(Dense(128, input_dim=X_train_s.shape[1], activation='swish'))
+y1_model.add(Dropout(.25))
+y1_model.add(Dense(256, activation='relu'))
+y1_model.add(Dropout(.3))
+y1_model.add(Dense(300, activation='leaky_relu'))
+y1_model.add(Dropout(.5))
+y1_model.add(Dense(200, activation = 'swish'))
+y1_model.add(Dropout(0.3))
+y1_model.add(Dense(100, activation = 'swish'))
+y1_model.add(Dropout(0.25))
+y1_model.add(Dense(30, activation = 'leaky_relu'))
+y1_model.add(Dropout(0.2))
+y1_model.add(Dense(1, activation='linear'))
+```
+
+```{python}
+opt = keras.optimizers.Adam(learning_rate=0.0005)
+y1_model.compile(loss="mean_squared_error", optimizer=opt, metrics=['mse'])
+```
+
+```{python}
+early_stop = keras.callbacks.EarlyStopping(monitor='val_mse', patience=30)
+
+history = y1_model.fit(
+    X_train_s, 
+    y1_train_s, 
+    epochs=2000, 
+    validation_split=0.5, 
+    batch_size=256,       
+    callbacks=[early_stop], 
+    shuffle=True          
+)
+```
+
+```{python}
+y1_preds = y1_model.predict(X_test_s)
+final_casual = scaler_y1.inverse_transform(y1_preds)
+
+y1_model.save("motion_model1.keras")
+joblib.dump(scaler_x, "scaler_x1.pkl")
+joblib.dump(scaler_y1, "scaler_y1.pkl")
+```
+
+```{python}
+hist = pandas.DataFrame(history.history)
+```
+
+```{python}
+y2_model = Sequential()
+y2_model.add(Dense(128, input_dim=X_train_s2.shape[1], activation='swish'))
+y2_model.add(Dropout(.25))
+y2_model.add(Dense(256, activation='relu'))
+y2_model.add(Dropout(.3))
+y2_model.add(Dense(300, activation='leaky_relu'))
+y2_model.add(Dropout(.5))
+y2_model.add(Dense(200, activation = 'swish'))
+y2_model.add(Dropout(0.3))
+y2_model.add(Dense(100, activation = 'swish'))
+y2_model.add(Dropout(0.25))
+y2_model.add(Dense(30, activation = 'leaky_relu'))
+y2_model.add(Dropout(0.2))
+y2_model.add(Dense(1, activation='linear'))
+```
+
+```{python}
+opt = keras.optimizers.Adam(learning_rate=0.0005)
+early_stop = keras.callbacks.EarlyStopping(monitor='val_mse', patience=30)
+
+y2_model.compile(loss="mean_squared_error", optimizer=opt, metrics=['mse'])
+
+history2 = y2_model.fit(
+    X_train_s2, 
+    y2_train_s, 
+    epochs=2000, 
+    validation_split=0.5, 
+    batch_size=256,       
+    callbacks=[early_stop], 
+    shuffle=True          
+)
+```
+
+```{python}
+y2_preds = y2_model.predict(X_test_s)
+final_casual = scaler_y2.inverse_transform(y2_preds)
+
+y2_model.save("motion_model2.keras")
+joblib.dump(scaler_x, "scaler_x2.pkl")
+joblib.dump(scaler_y2, "scaler_y2.pkl")
+```
+
+```{python}
+hist2 = pandas.DataFrame(history2.history)
+```
+
+```{python}
+mini = pandas.read_csv("https://raw.githubusercontent.com/byui-cse/cse450-course/master/data/biking_holdout_test_mini.csv")
+```
+
+```{python}
+new_mini = features(mini)
+```
+
+```{python}
+mini_scale1 = scaler_x.transform(new_mini) 
+mini_scale2 = scaler_x2.transform(new_mini)
+```
+
+```{python}
+motion1 = tensorflow.keras.models.load_model('motion_model1.keras')
+motion2 = tensorflow.keras.models.load_model('motion_model2.keras')
+```
+
+```{python}
+predictions1 = motion1.predict(mini_scale1)
+predictions2 = motion2.predict(mini_scale2)
+
+close1 = scaler_y1.inverse_transform(predictions1)
+close2 = scaler_y2.inverse_transform(predictions2)
+
+closer = pandas.DataFrame()
+closer['casual'] = close1.flatten()
+closer['registered'] = close2.flatten()
+closer['total'] = closer['casual'] + closer['registered']
+
+final = pandas.DataFrame()
+final['predictions'] = closer['total']
+```
+
+```{python}
+final.to_csv('motion-predictions.csv', index=False)
+```
+
+```{python}
+holdout = pandas.read_csv("https://raw.githubusercontent.com/byui-cse/cse450-course/master/data/bikes_december.csv")
+```
+
+```{python}
+big_holdout = features(holdout)
+```
+
+```{python}
+big_scale1 = scaler_x.transform(big_holdout) 
+big_scale2 = scaler_x2.transform(big_holdout)
+```
+
+```{python}
+big_pred1 = motion1.predict(big_scale1)
+big_pred2 = motion2.predict(big_scale2)
+```
+
+```{python}
+rev1 = scaler_y1.inverse_transform(big_pred1)
+rev2 = scaler_y2.inverse_transform(big_pred2)
+
+closest = pandas.DataFrame()
+closest['casual'] = rev1.flatten()
+closest['registered'] = rev2.flatten()
+closest['total'] = closest['casual'] + closest['registered']
+
+big_predictions = pandas.DataFrame()
+big_predictions['predictions'] = closer['total']
+
+big_predictions.to_csv('big-motion-predictions.csv', index=False)
+```
