@@ -3,159 +3,172 @@ import pandas as pd
 import numpy as np
 from IPython.display import display
 from lets_plot import *
+import holidays
 
 # Make numpy values easier to read.
 np.set_printoptions(precision=3, suppress=True)
 
 LetsPlot.setup_html()
 
-bikes = pd.read_csv(
-    "https://raw.githubusercontent.com/byui-cse/cse450-course/master/data/bikes.csv")
+bikes = pd.read_csv("bikes.csv")
 
-bikes["dteday"] = pd.to_datetime(bikes["dteday"], errors="coerce")
-bikes["total_rentals"] = bikes["casual"] + bikes["registered"]
-bikes["season"] = bikes["season"].astype("category")
-bikes["weathersit"] = bikes["weathersit"].astype("category")
-bikes["holiday"] = bikes["holiday"].astype("category")
-bikes["workingday"] = bikes["workingday"].astype("category")
 ```
 
 
 ```{python}
-bikes.info()
+# Load MLB games data and preprocess
+mlb_df = pd.read_csv("Games.csv")
+# Filter to Washington games and keep only the datetime column
+mlb_df = mlb_df.loc[mlb_df['hometeamCity'] == 'Washington', ['gameDateTimeEst']]
+mlb_df['gameDateTimeEst'] = pd.to_datetime(mlb_df['gameDateTimeEst'])
+mlb_df['gameDateTimeEst'] = mlb_df['gameDateTimeEst'].dt.floor('h')
+
+def create_features(df):
+	# holidays
+	df['dteday'] = pd.to_datetime(df['dteday'])
+	dc_holidays = holidays.US(state='DC')
+	df['holiday_name'] = df['dteday'].apply(lambda x: dc_holidays.get(x))
+	holiday_features = pd.get_dummies(df['holiday_name'], dtype=int)
+	df = pd.concat([df, holiday_features], axis=1)
+
+	# hour of day cycles
+	df["hour_sin"] = np.sin(2 * np.pi * df["hr"] / 24)
+	df["hour_cos"] = np.cos(2 * np.pi * df["hr"] / 24)
+
+	# year
+	df['year'] = df['dteday'].dt.year
+
+	# month cycle
+	df['month'] = df['dteday'].dt.month
+	df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
+	df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
+
+	# day of year cycle
+	df['day_of_year'] = df['dteday'].dt.dayofyear
+	df['day_of_year_sin'] = np.sin(2 * np.pi * df['day_of_year'] / 365)
+	df['day_of_year_cos'] = np.cos(2 * np.pi * df['day_of_year'] / 365)
+
+	# day of week cycle
+	df['day_of_week'] = df['dteday'].dt.dayofweek.astype(int)
+	df['day_of_week_sin'] = np.sin(2 * np.pi * df['day_of_week'] / 7)
+	df['day_of_week_cos'] = np.cos(2 * np.pi * df['day_of_week'] / 7)
+
+	# season cycle
+	df['season_sin'] = np.sin(2 * np.pi * df['season'] / 4)
+	df['season_cos'] = np.cos(2 * np.pi * df['season'] / 4)
+
+	# temperature difference
+	df['temp_diff'] = df['feels_like_c'] - df['temp_c']
+
+	# day type
+	df['day_type'] = df.apply(
+		lambda row: 'working_day' if row['holiday'] == 0 and row['workingday'] == 1 else (
+			'weekend' if row['workingday'] == 0 and row['holiday'] == 0 else (
+				'holiday_weekend' if row['holiday'] == 1 and row['workingday'] == 0 else 'holiday_weekday'
+			)
+		), axis=1)
+	day_type_features = pd.get_dummies(df['day_type'], dtype=int)
+	df = pd.concat([df, day_type_features], axis=1)
+
+	df['covid'] = df['dteday'].apply(lambda x: 1 if x >= pd.to_datetime('2020-03-01') else 0)
+
+	# MLB indicator: combine date and hour then check membership in MLB schedule
+	combined_dt = pd.to_datetime(df['dteday']) + pd.to_timedelta(df['hr'], unit='h')
+	df['mlb'] = combined_dt.isin(mlb_df['gameDateTimeEst']).astype(int)
+
+	# Return all columns except those we explicitly want to drop; keep 'hr' and 'dteday' for later analysis
+	# We keep 'dteday' (as datetime) to allow day‑level grouping later.
+	return df.drop(columns=['holiday_name', 'month', 'day_of_week', 'temp_c', 'season', 'day_of_year', 'day_type'])
+
+# Apply feature engineering
+df_features = create_features(bikes)
+
+# Create a date column (without time) for day‑level grouping
+df_features['date'] = df_features['dteday'].dt.date
+# Determine if a given day has any MLB game (max of mlb flag for that day)
+day_mlb_flag = df_features.groupby('date')['mlb'].max().rename('mlb_day')
+# Merge the day‑level flag back onto the original dataframe
+df_features = df_features.merge(day_mlb_flag, left_on='date', right_index=True)
+
+# Compute average casual and registered counts per hour for MLB and non‑MLB days
+mlb_avg = (
+	df_features[df_features['mlb_day'] == 1]
+	.groupby('hr')[['casual', 'registered']]
+	.mean()
+	.reset_index()
+	.assign(MLB='MLB Day')
+)
+non_mlb_avg = (
+	df_features[df_features['mlb_day'] == 0]
+	.groupby('hr')[['casual', 'registered']]
+	.mean()
+	.reset_index()
+	.assign(MLB='Non‑MLB Day')
+)
+
+
+
 ```
 
 
-## Rental relationships by data type
-
 ```{python}
-numeric_cols = ["temp_c", "feels_like_c", "hum", "windspeed", "hr"]
-for col in numeric_cols:
-    p = (
-        ggplot(bikes, aes(x=col, y="total_rentals", color="season"))
-        + geom_point(alpha=0.25, size=1.2)
-        + geom_smooth(method="loess", color="#1f77b4", se=True)
-        + labs(
-            title=f"Total Rentals vs {col.replace('_', ' ').title()}",
-            x=col.replace("_", " ").title(),
-            y="Total Rentals",
-            color="Season",
-        )
-        + theme_minimal()
-        + theme(axis_text_x=element_text(angle=20, hjust=1))
-    )
-    display(p)
+plot_df = pd.concat([mlb_avg, non_mlb_avg], ignore_index=True)
+plot_long = plot_df.melt(id_vars=['hr', 'MLB'], value_vars=['casual', 'registered'],
+						 var_name='UserType', value_name='Count')
+
+# Plot using lets‑plot with facets for MLB vs non‑MLB
+ggplot(plot_long, aes(x='hr', y='Count', color='UserType')) + \
+	geom_line() + \
+	labs(title='Average Bike Users by Hour', x='Hour of Day', y='Average Count') + \
+	facet_wrap('MLB') + \
+	theme_minimal()
+
 ```
 
 ```{python}
-cat_cols = ["season", "weathersit", "holiday", "workingday"]
-for col in cat_cols:
-    p = (
-        ggplot(bikes, aes(x=col, y="total_rentals", fill=col))
-        + geom_boxplot(color="#2c7fb8")
-        + labs(
-            title=f"Total Rental Distribution by {col.title()}",
-            x=col.replace("_", " ").title(),
-            y="Total Rentals",
-            fill=col.replace("_", " ").title(),
-        )
-        + theme_minimal()
-        + theme(axis_text_x=element_text(angle=25, hjust=1))
-    )
-    display(p)
-```
-
-## Hourly and seasonal rental patterns
-
-```{python}
-hourly = (
-    bikes.groupby(["hr", "season"], as_index=False)
-    .agg({"total_rentals": "mean"})
-    .rename(columns={"total_rentals": "avg_rentals"})
+# ---------------------------------------------------------------------
+# Plot a single MLB day and a single non‑MLB day (no averaging)
+# ---------------------------------------------------------------------
+# Select up to 10 MLB days and 10 non‑MLB days
+mlb_dates = (
+	df_features[df_features['mlb_day'] == 1]
+	['date']
+	.drop_duplicates()
+	.head(10)
 )
-p = (
-    ggplot(hourly, aes(x="hr", y="avg_rentals", color="season", group="season"))
-    + geom_line(size=1.2)
-    + geom_point(size=2)
-    + labs(
-        title="Average Hourly Rentals by Season",
-        x="Hour of Day",
-        y="Average Total Rentals",
-        color="Season",
-    )
-    + theme_minimal()
+non_mlb_dates = (
+	df_features[df_features['mlb_day'] == 0]
+	['date']
+	.drop_duplicates()
+	.head(10)
 )
-display(p)
-```
 
-```{python}
-weather = (
-    bikes.groupby(["weathersit", "hr"], as_index=False)
-    .agg({"total_rentals": "mean"})
-    .rename(columns={"total_rentals": "avg_rentals"})
+selected_dates = pd.concat([mlb_dates, non_mlb_dates])
+example_df = df_features[df_features['date'].isin(selected_dates)].copy()
+example_df['DayLabel'] = example_df['mlb_day'].map({1: 'MLB Day', 0: 'Non‑MLB Day'})
+
+# Melt to long format for plotting casual & registered counts
+example_long = example_df.melt(
+	id_vars=['hr', 'date', 'DayLabel', 'mlb'],
+	value_vars=['casual', 'registered'],
+	var_name='UserType',
+	value_name='Count'
 )
-p = (
-    ggplot(weather, aes(x="hr", y="avg_rentals", color="weathersit", group="weathersit"))
-    + geom_line(size=1.2)
-    + labs(
-        title="Hourly Rentals by Weather Situation",
-        x="Hour of Day",
-        y="Average Total Rentals",
-        color="Weather Situation",
-    )
-    + theme_minimal()
-)
-display(p)
-```
 
-## Holiday and workday effects on rental volume
-
-```{python}
-season_mean = (
-    bikes.groupby("season", as_index=False)
-    .agg({"total_rentals": "mean"})
-    .rename(columns={"total_rentals": "avg_rentals"})
-)
-p = (
-    ggplot(season_mean, aes(x="season", y="avg_rentals", fill="season"))
-    + geom_bar(stat="identity", color="black")
-    + labs(
-        title="Average Rentals by Season",
-        x="Season",
-        y="Average Total Rentals",
-        fill="Season",
-    )
-    + theme_minimal()
-    + theme(axis_text_x=element_text(angle=20, hjust=1))
-)
-display(p)
-```
-
-```{python}
-holiday_mean = (
-    bikes.groupby("holiday", as_index=False)
-    .agg({"total_rentals": "mean"})
-    .rename(columns={"total_rentals": "avg_rentals"})
-)
-p = (
-    ggplot(holiday_mean, aes(x="holiday", y="avg_rentals", fill="holiday"))
-    + geom_bar(stat="identity", color="black")
-    + labs(
-        title="Average Rentals: Holiday vs Non-Holiday",
-        x="Holiday",
-        y="Average Total Rentals",
-        fill="Holiday",
-    )
-    + theme_minimal()
-    + theme(axis_text_x=element_text(angle=20, hjust=1))
-)
-display(p)
-```
-
-
-
-```{python}
-ggplot(bikes, aes(x="dteday", y="registered")) + \
-    stat_summary(geom="bar", fun="median")+\
-    facet_wrap("holiday")
+# Plot hourly counts for the selected days, faceted by the specific date
+ggplot(example_long, aes(x='hr', y='Count', color='UserType')) + \
+	geom_line() + \
+	labs(
+		title='Hourly Bike Users for Sample MLB & Non‑MLB Days',
+		x='Hour of Day',
+		y='Count'
+	) + \
+	facet_wrap('date') + \
+	geom_point(
+		data=example_long[example_long['mlb'] == 1],
+		mapping=aes(x='hr', y='Count'),
+		size=3,
+		color='black'
+	) + \
+	theme_minimal()
 ```
