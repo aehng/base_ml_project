@@ -279,7 +279,35 @@ closest['registered'] = rev2.flatten()
 closest['total'] = closest['casual'] + closest['registered']
 
 big_predictions = pandas.DataFrame()
-big_predictions['predictions'] = closer['total']
+big_predictions['predictions'] = closest['total']
 
-big_predictions.to_csv('big-motion-predictions.csv', index=False)
+big_predictions.to_csv('real-big-motion-predictions.csv', index=False)
+```
+
+Last freakin' dataset to do I guess
+```{python}
+last = pandas.read_csv("https://raw.githubusercontent.com/byui-cse/cse450-course/master/data/bikes_december.csv")
+```
+
+```{python}
+idk_anymore = features(last)
+last_scale1 = scaler_x.transform(idk_anymore)
+last_scale2 = scaler_x2.transform(idk_anymore)
+last_pred1 = motion1.predict(last_scale1)
+last_pred2 = motion2.predict(last_scale2)
+
+undo = scaler_y1.inverse_transform(last_pred1)
+undo2 = scaler_y2.inverse_transform(last_pred2)
+
+datathang = pandas.DataFrame()
+datathang['casual'] = undo.flatten()
+datathang['registered'] = undo2.flatten()
+datathang['total'] = datathang['casual'] + datathang['registered']
+
+done = pandas.DataFrame()
+done['predictions'] = datathang['total']
+```
+
+```{python}
+done.to_csv('december.csv', index=False)
 ```
